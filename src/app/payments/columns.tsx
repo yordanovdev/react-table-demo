@@ -1,6 +1,6 @@
 "use client";
 
-import { ColumnDef } from "@tanstack/react-table";
+import { TableColumnDef } from "./data-table";
 
 export type Payment = {
   id: string;
@@ -9,10 +9,13 @@ export type Payment = {
   email: string;
 };
 
-export const columns: ColumnDef<Payment>[] = [
+export const columns: TableColumnDef<Payment>[] = [
   {
     accessorKey: "status",
     header: "Status",
+    filter: {
+      filterName: "status",
+    },
   },
   {
     accessorKey: "email",
@@ -21,6 +24,9 @@ export const columns: ColumnDef<Payment>[] = [
   {
     accessorKey: "amount",
     header: "Amount",
+    filter: {
+      filterName: "amount",
+    },
   },
   {
     accessorKey: "custom",

@@ -98,7 +98,10 @@ const PaymentsPage = () => {
           selectionValue: rowSelection,
           onRowSelectionChange: setRowSelection,
         }}
-        filter={{
+        columnFilter={{
+          onFilterValuesChange: (values) => console.log(values),
+        }}
+        globalFilter={{
           filterValue: filterValue,
           onFilterChange: setFilterValue,
         }}

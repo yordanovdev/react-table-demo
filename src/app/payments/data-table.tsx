@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useMemo, useState } from "react";
+import React, { Fragment, useMemo, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -39,19 +39,43 @@ import {
   ArrowDownNarrowWide,
   ArrowDownUp,
   ArrowUpNarrowWide,
+  Filter,
 } from "lucide-react";
 
+interface CustomTableColumnBase<TData> {
+  filter?: TableColumnFilterBase;
+}
+
+interface ITableColumnFilterBodyProps {
+  value: string;
+  onValueChange: (value: string) => void;
+}
+
+interface TableColumnFilterBase {
+  filterName: string;
+  body?: (props: ITableColumnFilterBodyProps) => React.ReactNode;
+}
+
+type CustomTableColumn<TData> = CustomTableColumnBase<TData>;
+
+export type TableColumnDef<TData> = ColumnDef<TData> & CustomTableColumn<TData>;
+
 interface DataTableProps<TData> {
-  columns: ColumnDef<TData>[];
+  columns: TableColumnDef<TData>[];
   data: TData[];
   pagination: PaginationState;
   totalCount: number;
   loading: boolean;
-  filter?: IFilter;
+  globalFilter?: IGlobalFilter;
+  columnFilter?: IColumnFilter<TData>;
   visibility?: boolean;
   sorting?: ISorting;
   rowSelection?: IRowSelection<TData>;
   onPaginationChange: OnChangeFn<PaginationState>;
+}
+
+interface IColumnFilter<TData> {
+  onFilterValuesChange: (filterValues: FilteringStateValues) => void;
 }
 
 interface IRowSelection<TData> {
@@ -60,7 +84,7 @@ interface IRowSelection<TData> {
   onRowSelectionChange: OnChangeFn<RowSelectionState>;
 }
 
-interface IFilter {
+interface IGlobalFilter {
   filterValue: string;
   onFilterChange: (updateFilterValue: string) => void;
 }
@@ -70,19 +94,42 @@ interface ISorting {
   onSortingChange: OnChangeFn<SortingState>;
 }
 
+type FilteringState = {
+  [x: string]: {
+    value: string;
+    active: boolean;
+  };
+};
+
+type FilteringStateValues = {
+  [x: string]: string;
+};
+
+let filterTimer: NodeJS.Timeout;
+
 export function DataTable<TData>({
   columns,
   data,
   pagination,
   totalCount,
   loading,
-  filter,
+  globalFilter,
   visibility,
   sorting,
   rowSelection,
+  columnFilter,
   onPaginationChange,
 }: Readonly<DataTableProps<TData>>) {
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+
+  const [filterValues, setFilterValues] = useState<FilteringState>({});
+
+  const showFilterRow = useMemo(() => {
+    const values = Object.values(filterValues);
+    const hasActiveFilterValues = values.find((i) => i.active);
+
+    return hasActiveFilterValues;
+  }, [filterValues]);
 
   const updatedColumns = useMemo(() => {
     if (!rowSelection) return columns;
@@ -105,7 +152,7 @@ export function DataTable<TData>({
 
   const table = useReactTable({
     data,
-    columns: updatedColumns,
+    columns: updatedColumns as ColumnDef<TData>[],
     rowCount: totalCount,
     manualPagination: true,
     getRowId: (originalRow: TData, index: number) =>
@@ -130,6 +177,28 @@ export function DataTable<TData>({
     },
   });
 
+  const onFilterValueChange = (id: string, value: string) => {
+    const prevValue = filterValues[id];
+    const newValue = { ...prevValue, value };
+    const newValues = { ...filterValues, [id]: newValue };
+    setFilterValues(newValues);
+
+    const output = Object.fromEntries(
+      Object.entries(newValues).map(([key, { value }]) => [key, value])
+    );
+
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => {
+      columnFilter?.onFilterValuesChange(output);
+    }, 500);
+  };
+
+  const onToggleFilterActivation = (id: string) => {
+    const prevValue = filterValues[id] ?? { active: false, value: "" };
+    const newValue = { ...prevValue, active: !prevValue.active };
+    setFilterValues((prev) => ({ ...prev, [id]: newValue }));
+  };
+
   const getSortingIcon = (
     direction: SortDirection | false,
     column: Column<TData, unknown>
@@ -138,6 +207,7 @@ export function DataTable<TData>({
       case "desc":
         return (
           <ArrowDownUp
+            className="cursor-pointer"
             size={"18px"}
             onClick={column.getToggleSortingHandler()}
           />
@@ -146,6 +216,7 @@ export function DataTable<TData>({
         return (
           <ArrowDownNarrowWide
             size={"18px"}
+            className="cursor-pointer"
             color="#0073e6"
             onClick={column.getToggleSortingHandler()}
           />
@@ -153,6 +224,7 @@ export function DataTable<TData>({
       default:
         return (
           <ArrowUpNarrowWide
+            className="cursor-pointer"
             size={"18px"}
             color="#0073e6"
             onClick={column.getToggleSortingHandler()}
@@ -164,34 +236,57 @@ export function DataTable<TData>({
   return (
     <div className="rounded-md border">
       <div className="flex gap-5 items-center w-full justify-between px-5 py-3 bg-slate-50 rounded-md">
-        {filter && <TableGlobalFilter filter={filter} />}
+        {globalFilter && <TableGlobalFilter filter={globalFilter} />}
         {visibility && <VisibilitySelector table={table} />}
       </div>
       <Table>
         <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => {
-                return (
-                  <TableHead key={header.id}>
-                    <div className="flex gap-1 items-center">
-                      {header.column.getCanSort() &&
-                        getSortingIcon(
-                          header.column.getNextSortingOrder(),
-                          header.column
-                        )}
-
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
+            <Fragment key={headerGroup.id}>
+              <TableRow>
+                {headerGroup.headers.map((header) => {
+                  return (
+                    <TableHead key={header.id}>
+                      <div className="flex gap-2 items-center whitespace-nowrap">
+                        <RenderFilterHeaderIcon
+                          onToggleFilterActivation={onToggleFilterActivation}
+                          filterValues={filterValues}
+                          column={header.column}
+                        />
+                        {header.column.getCanSort() &&
+                          getSortingIcon(
+                            header.column.getNextSortingOrder(),
+                            header.column
                           )}
-                    </div>
-                  </TableHead>
-                );
-              })}
-            </TableRow>
+
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext()
+                            )}
+                      </div>
+                    </TableHead>
+                  );
+                })}
+              </TableRow>
+              {/* filtering row */}
+              {showFilterRow && (
+                <TableRow>
+                  {headerGroup.headers.map((header) => {
+                    return (
+                      <TableHead key={header.id}>
+                        <ColumnFilter
+                          filterValues={filterValues}
+                          onFilterValueChange={onFilterValueChange}
+                          column={header.column}
+                        />
+                      </TableHead>
+                    );
+                  })}
+                </TableRow>
+              )}
+            </Fragment>
           ))}
         </TableHeader>
         <TableBody>
@@ -200,6 +295,85 @@ export function DataTable<TData>({
       </Table>
       <TablePagination table={table} />
     </div>
+  );
+}
+
+interface IRenderFilterHeaderIcon<TData> {
+  column: Column<TData>;
+  filterValues: FilteringState;
+  onToggleFilterActivation: (id: string) => void;
+}
+function RenderFilterHeaderIcon<TData>(
+  props: Readonly<IRenderFilterHeaderIcon<TData>>
+) {
+  const { column, filterValues, onToggleFilterActivation } = props;
+  const columnDef = column.columnDef as TableColumnDef<TData>;
+
+  const index = useMemo(() => {
+    return columnDef.filter?.filterName || "";
+  }, [columnDef.filter?.filterName]);
+
+  const filterValue = useMemo(() => {
+    if (!columnDef.filter) return;
+    return filterValues[columnDef.filter?.filterName as string];
+  }, [filterValues, columnDef.filter]);
+
+  if (!columnDef.filter) return;
+
+  return filterValue?.active ? (
+    <Filter
+      className="cursor-pointer"
+      size={"18px"}
+      color="#0073e6"
+      onClick={() => onToggleFilterActivation(index)}
+    />
+  ) : (
+    <Filter
+      className="cursor-pointer"
+      size={"18px"}
+      onClick={() => onToggleFilterActivation(index)}
+    />
+  );
+}
+
+interface IColumnDataFilter<TData> {
+  column: Column<TData>;
+  filterValues: FilteringState;
+  onFilterValueChange: (id: string, value: string) => void;
+}
+function ColumnFilter<TData>(props: Readonly<IColumnDataFilter<TData>>) {
+  const { column, filterValues, onFilterValueChange } = props;
+  const columnDef = column.columnDef as TableColumnDef<TData>;
+
+  const index = useMemo(() => {
+    return columnDef.filter?.filterName || "";
+  }, [columnDef.filter?.filterName]);
+
+  const filterValue = useMemo(() => {
+    if (!columnDef.filter) return;
+    return filterValues[columnDef.filter?.filterName as string];
+  }, [filterValues, columnDef.filter]);
+
+  if (!columnDef.filter) return;
+
+  return (
+    filterValue?.active && (
+      <div className="py-3 w-min">
+        {columnDef.filter?.body ? (
+          columnDef.filter.body({
+            value: filterValue.value,
+            onValueChange: (value: string) => onFilterValueChange(index, value),
+          })
+        ) : (
+          <Input
+            placeholder={`Enter ${index}`}
+            className="w-fit"
+            value={filterValue?.value}
+            onChange={(e) => onFilterValueChange(index, e.target.value)}
+          />
+        )}
+      </div>
+    )
   );
 }
 
@@ -263,7 +437,7 @@ function TablePagination<TData>(props: Readonly<ITablePagination<TData>>) {
 }
 
 interface ITableGlobalFilter {
-  filter?: IFilter;
+  filter?: IGlobalFilter;
 }
 
 let timer: NodeJS.Timeout;
@@ -297,7 +471,7 @@ function TableGlobalFilter(props: Readonly<ITableGlobalFilter>) {
 
 interface ICoreTableBody<TData> {
   loading: boolean;
-  columns: ColumnDef<TData>[];
+  columns: TableColumnDef<TData>[];
   table: TableType<TData>;
 }
 function CoreTableBody<TData>(props: Readonly<ICoreTableBody<TData>>) {
